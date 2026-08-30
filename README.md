@@ -29,10 +29,6 @@ Interface/AddOns/CraftFocus/img/anvil.tga
 Папку `img` терять нельзя — без неё не будет значков на карте.
 После распаковки перезайти в игру (не `/reload`).
 
-Аддон раньше назывался **CraftLens**. Настройки и накопленные наблюдения
-переносятся сами при первом запуске; старые команды `/craftlens` и `/cl`
-оставлены.
-
 ---
 
 ## Панель в окне профессии
@@ -101,7 +97,7 @@ Interface/AddOns/CraftFocus/img/anvil.tga
 
 ## Команды
 
-`/cf` или `/craftfocus` (старые `/cl`, `/craftlens` тоже работают).
+`/cf` или `/craftfocus`.
 
 | команда | что делает |
 | --- | --- |
@@ -177,9 +173,7 @@ window, one small watch window and a minimap button.
 
 Unpack so that `CraftFocus.toc`, `CraftFocus.lua` and the `img` folder end up in
 `Interface/AddOns/CraftFocus/`, then restart the game (not `/reload`). The `img`
-folder holds the map icons and must not be lost. The addon used to be called
-CraftLens; settings and gathered observations migrate by themselves and the old
-`/cl` and `/craftlens` commands still work.
+folder holds the map icons and must not be lost.
 
 ## The panel
 
