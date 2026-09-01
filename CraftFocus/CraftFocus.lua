@@ -14,7 +14,7 @@
 ----------------------------------------------------------------------]]
 
 local ADDON   = "CraftFocus"
-local VERSION = "0.1.0"
+local VERSION = "0.1.1"
 
 
 -- Fixed numbers and strings, gathered into one table on purpose: a chunk in
@@ -1314,6 +1314,14 @@ local function StartKeeper()
     -- profession window shut: boxes on the rows, a line on a tooltip, and a
     -- fresh count of the bags when something changed in them
     if WatchTick then pcall(WatchTick, step) end
+
+    -- Telling the profession button apart from whatever else the client
+    -- calls "current" takes two more looks, one of them after the window is
+    -- shut, so it lives on this timer. Reached through a global because this
+    -- chunk has run out of the 200 local slots the client allows.
+    if CraftFocusProf and CraftFocusProf.tick then
+      pcall(CraftFocusProf.tick, step, open)
+    end
   end)
 end
 
@@ -2484,19 +2492,40 @@ RememberSlot = function(line, slot)
   DB.profSlot[line] = slot
 end
 
--- No name matching at all. While a profession window is open, the client
--- marks its action button as the current action -- the wiki says so in as
--- many words -- so the slot can simply be read off the bar and kept per
--- profession. That also settles the case of several professions on one bar.
-LearnProfessionSlot = function(announce)
-  if type(IsCurrentAction) ~= "function" then return nil end
-  if type(GetTradeSkillLine) ~= "function" then return nil end
+-- While a profession window is open the client marks its action button as
+-- the current action. The trouble is that it marks other things current as
+-- well: a spell in mid-cast, a stance, an aura. Taking the first current
+-- slot is how pressing button 3 and then opening Tailoring taught the addon
+-- slot 3 and kept it for good (reported by Servo, 01.09.2026).
+--
+-- Names cannot settle it: the bar and the profession pane answer in
+-- different languages on this server, which is why this code went looking at
+-- "current" in the first place. What does settle it is WHEN a slot is
+-- current, in three looks:
+--
+--   1. the window opens      -- candidates: everything current right now
+--   2. a couple of seconds later, window still open -- a finished cast has
+--      stopped being current, so it drops out
+--   3. the window is shut    -- a stance or an aura is still current, and
+--      the profession button is not, so what remains is the profession
+--
+-- A name that does match is of course taken at once, and a lone candidate
+-- needs no test at all. Where the answer stays ambiguous nothing is
+-- remembered: a wrong slot kept for good is worse than no slot, and
+-- /cf prof <number> sets it by hand.
+-- A global, not a local: this chunk has used up all 200 local slots the
+-- client allows, and fields on a table cost none of them.
+CraftFocusProf = {}
 
-  local line = GetTradeSkillLine()
-  if not line or line == "" or line == "UNKNOWN" then return nil end
+CraftFocusProf.learned = function(line, slot, announce, known)
+  RememberSlot(line, slot)
+  if announce and known ~= slot then
+    Print("|cff9d9d9d" .. Lf("wSlotLearn", slot, line) .. "|r")
+  end
+end
 
-  local known = (type(DB.profSlot) == "table") and DB.profSlot[line] or nil
-
+CraftFocusProf.current = function(line)
+  local cand, n, named = {}, 0, nil
   local slot = 1
   while slot <= 120 do
     local live = (type(HasAction) ~= "function") or HasAction(slot)
@@ -2506,16 +2535,86 @@ LearnProfessionSlot = function(announce)
       if type(IsAttackAction) == "function" and IsAttackAction(slot) then skip = true end
       if type(IsAutoRepeatAction) == "function" and IsAutoRepeatAction(slot) then skip = true end
       if not skip then
-        RememberSlot(line, slot)
-        if announce and known ~= slot then
-          Print("|cff9d9d9d" .. Lf("wSlotLearn", slot, line) .. "|r")
-        end
-        return slot
+        n = n + 1
+        cand[n] = slot
+        if not named and line and SameName(ActionName(slot), line) then named = slot end
       end
     end
     slot = slot + 1
   end
-  return nil
+  return cand, n, named
+end
+
+LearnProfessionSlot = function(announce)
+  CraftFocusProf.pend = nil
+  if type(IsCurrentAction) ~= "function" then return nil end
+  if type(GetTradeSkillLine) ~= "function" then return nil end
+
+  local line = GetTradeSkillLine()
+  if not line or line == "" or line == "UNKNOWN" then return nil end
+
+  local known = (type(DB.profSlot) == "table") and DB.profSlot[line] or nil
+  local cand, n, named = CraftFocusProf.current(line)
+
+  if named then
+    CraftFocusProf.learned(line, named, announce, known)
+    return named
+  end
+  if n == 1 then
+    CraftFocusProf.learned(line, cand[1], announce, known)
+    return cand[1]
+  end
+  if n == 0 then return known end
+
+  -- ambiguous: let the timer below watch these slots
+  CraftFocusProf.pend = { line = line, cand = cand, n = n, known = known,
+                announce = announce, t = 0, stage = 1 }
+  return known
+end
+
+-- steps 2 and 3 of the story above; called from the keeper
+-- keeps the candidates whose "current" state is what we are looking for
+CraftFocusProf.survivors = function(want)
+  local left, k = {}, 0
+  local i = 1
+  while CraftFocusProf.pend.cand[i] do
+    local slot = CraftFocusProf.pend.cand[i]
+    local cur = IsCurrentAction(slot) and true or false
+    if cur == want then k = k + 1; left[k] = slot end
+    i = i + 1
+  end
+  return left, k
+end
+
+CraftFocusProf.tick = function(step, open)
+  local pend = CraftFocusProf.pend
+  if not pend then return end
+  if type(IsCurrentAction) ~= "function" then CraftFocusProf.pend = nil; return end
+
+  if open then
+    if pend.stage ~= 1 then return end
+    pend.t = pend.t + (type(step) == "number" and step or 0.05)
+    if pend.t < 2.5 then return end
+    -- still current with the window open: a cast that has ended drops out
+    local left, k = CraftFocusProf.survivors(true)
+    pend.stage = 2
+    if k == 1 then
+      CraftFocusProf.learned(pend.line, left[1], pend.announce, pend.known)
+      CraftFocusProf.pend = nil
+      return
+    end
+    if k == 0 then CraftFocusProf.pend = nil; return end
+    pend.cand, pend.n = left, k
+    return
+  end
+
+  -- the window is shut: a stance or an aura is still current, the
+  -- profession button is not
+  local left, k = CraftFocusProf.survivors(false)
+  if k == 1 then
+    CraftFocusProf.learned(pend.line, left[1], pend.announce, pend.known)
+  end
+  CraftFocusProf.pend = nil
 end
 
 ListActions = function()
@@ -2548,17 +2647,28 @@ end
 local function OpenProfession(line)
   if type(UseAction) ~= "function" then return false end
 
-  -- the slot the player pointed at, or the one that worked before
-  if type(DB.profSlot) == "table" and line and DB.profSlot[line] then
-    local slot = DB.profSlot[line]
-    if type(HasAction) ~= "function" or HasAction(slot) then
-      pcall(UseAction, slot)
+  local stored = (type(DB.profSlot) == "table") and line and DB.profSlot[line] or nil
+  local live = stored and ((type(HasAction) ~= "function") or HasAction(stored))
+
+  -- The stored slot goes first when it still says the right thing, or when
+  -- it says nothing readable at all -- names differ by language here, so an
+  -- unreadable or foreign name is no reason to distrust it.
+  if live then
+    local name = ActionName(stored)
+    if not name or name == "" or SameName(name, line) then
+      pcall(UseAction, stored)
       return true
     end
   end
 
-  if not line or line == "" or line == "UNKNOWN" then return false end
+  if not line or line == "" or line == "UNKNOWN" then
+    -- with no profession name there is nothing to check against
+    if live then pcall(UseAction, stored); return true end
+    return false
+  end
 
+  -- a slot that names the profession is better evidence than a stored
+  -- number, and it also heals a number that was learnt wrong
   local slot = 1
   while slot <= 120 do
     if type(HasAction) ~= "function" or HasAction(slot) then
@@ -2570,6 +2680,9 @@ local function OpenProfession(line)
     end
     slot = slot + 1
   end
+
+  -- nothing on the bar names it: the stored slot is all we have
+  if live then pcall(UseAction, stored); return true end
   return false
 end
 

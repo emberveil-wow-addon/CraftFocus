@@ -3,7 +3,7 @@
 ## Notes: Filters and sorting for the trade skill list, plus a watch list for the reagents you still need.
 ## Notes-ruRU: Фильтры и сортировка в окне профессии и слежение за реагентами, которых не хватает.
 ## Author: Vivk
-## Version: 0.1.0
+## Version: 0.1.1
 ## SavedVariables: CraftFocusDrops, CraftFocusKinds
 ## SavedVariablesPerCharacter: CraftFocusDB
 
